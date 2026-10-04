@@ -28,11 +28,11 @@ You need Docker and a reverse proxy that serves the container over HTTPS (Caddy,
        ports:
          - "8080:8080"
        environment:
-         PUBLIC_URL: https://paperless-mcp.example.com
          SECRET_KEY: ${SECRET_KEY}
+         # Recommended: the public HTTPS URL (otherwise derived from X-Forwarded-Proto / X-Forwarded-Host)
+         PUBLIC_URL: https://paperless-mcp.example.com
          # Optional: preconfigure your Paperless instance (users sign in with username + password)
          # PAPERLESS_URL: https://paperless.example.com
-         ASPNETCORE_FORWARDEDHEADERS_ENABLED: "true"
    ```
 
 2. Generate a secret and start the container:
@@ -50,6 +50,19 @@ You need Docker and a reverse proxy that serves the container over HTTPS (Caddy,
    }
    ```
 
+   With Traefik, use labels on the service instead of publishing a port:
+
+   ```yaml
+       labels:
+         - traefik.enable=true
+         - traefik.http.routers.paperless-mcp.rule=Host(`paperless-mcp.example.com`)
+         - traefik.http.routers.paperless-mcp.entrypoints=websecure
+         - traefik.http.routers.paperless-mcp.tls.certresolver=letsencrypt
+         - traefik.http.services.paperless-mcp.loadbalancer.server.port=8080
+   ```
+
+   The server trusts `X-Forwarded-For`, `X-Forwarded-Proto` and `X-Forwarded-Host` from the proxy by default.
+
 4. Add `https://paperless-mcp.example.com/mcp` as an MCP server in your client (see [Connecting clients](#connecting-clients)). A browser window opens where you sign in to Paperless and allow access.
 
 To run the MCP server next to Paperless in the same Compose project, add the service to your existing Paperless `docker-compose.yml` and set `PAPERLESS_URL: http://webserver:8000` (the internal Paperless service name and port).
@@ -60,7 +73,7 @@ All settings are environment variables.
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `PUBLIC_URL` | `http://localhost:8080` | Public URL clients use to reach the server, without a path. The MCP endpoint is `PUBLIC_URL/mcp`. Also used as the OAuth issuer, so it must match exactly what clients see. |
+| `PUBLIC_URL` | derived | Public URL clients use to reach the server, without a path. The MCP endpoint is `PUBLIC_URL/mcp`. Also used as the OAuth issuer. If unset, it is derived from each request (`X-Forwarded-Proto` / `X-Forwarded-Host` or `Host`). Setting it is recommended. |
 | `SECRET_KEY` | random | At least 32 characters. Encrypts client registrations, authorization codes and tokens. If unset, a random key is generated at startup and every client must sign in again after a restart. |
 | `PAPERLESS_URL` | – | Preconfigured Paperless instance. If set, users sign in with Paperless username and password (or API token). If unset, users enter URL and API token. |
 | `PAPERLESS_ALLOWED_HOSTS` | – | Only without `PAPERLESS_URL`: comma-separated hostnames users may connect to, e.g. `paperless.example.com,*.home.arpa`. Empty allows any host. |
@@ -69,7 +82,7 @@ All settings are environment variables.
 | `PAPERLESS_TIMEOUT_SECONDS` | `60` | Timeout for requests to Paperless. |
 | `MAX_UPLOAD_MB` | `50` | Maximum size of documents uploaded through `upload_document`. |
 | `MAX_DOWNLOAD_MB` | `25` | Maximum size of files returned by `download_document`. |
-| `ASPNETCORE_FORWARDEDHEADERS_ENABLED` | `false` | Set to `true` behind a reverse proxy so client IPs (used for rate limiting) are read from `X-Forwarded-For`. |
+| `TRUST_FORWARDED_HEADERS` | `true` | Use `X-Forwarded-For`, `X-Forwarded-Proto` and `X-Forwarded-Host` from a reverse proxy. Set to `false` if the server is exposed directly without a proxy. |
 
 ## Connecting clients
 

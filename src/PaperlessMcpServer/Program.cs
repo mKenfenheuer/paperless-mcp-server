@@ -2,9 +2,11 @@ using System.Net;
 using System.Reflection;
 using System.Threading.RateLimiting;
 using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.Extensions.Caching.Memory;
 using ModelContextProtocol;
 using ModelContextProtocol.AspNetCore.Authentication;
+using ModelContextProtocol.Authentication;
 using ModelContextProtocol.Protocol;
 using PaperlessMcpServer.Auth;
 using PaperlessMcpServer.Configuration;
@@ -65,14 +67,21 @@ builder.Services
     .AddScheme<AuthenticationSchemeOptions, SealedTokenAuthenticationHandler>(SealedTokenAuthenticationHandler.SchemeName, null)
     .AddMcp(o =>
     {
-        o.ResourceMetadata = new()
+        // Protected resource metadata (RFC 9728), built per request because the public URL may be
+        // derived from the request when PUBLIC_URL is not set.
+        o.Events.OnResourceMetadataRequest = ctx =>
         {
-            Resource = options.McpUrl.AbsoluteUri,
-            AuthorizationServers = { options.Issuer },
-            ScopesSupported = [OAuthEndpoints.Scope],
-            BearerMethodsSupported = ["header"],
-            ResourceName = "Paperless-ngx",
-            ResourceDocumentation = "https://github.com/mKenfenheuer/paperless-mcp-server",
+            var request = ctx.HttpContext.Request;
+            ctx.ResourceMetadata = new ProtectedResourceMetadata
+            {
+                Resource = options.GetMcpUrl(request).AbsoluteUri,
+                AuthorizationServers = { options.GetIssuer(request) },
+                ScopesSupported = [OAuthEndpoints.Scope],
+                BearerMethodsSupported = ["header"],
+                ResourceName = "Paperless-ngx",
+                ResourceDocumentation = "https://github.com/mKenfenheuer/paperless-mcp-server",
+            };
+            return Task.CompletedTask;
         };
     });
 builder.Services.AddAuthorization();
@@ -117,20 +126,32 @@ if (options.EphemeralSecret)
 {
     app.Logger.LogWarning("Running with an ephemeral SECRET_KEY: issued tokens become invalid on restart.");
 }
-app.Logger.LogInformation("Paperless MCP server {Version} – MCP endpoint {McpUrl} – mode: {Mode}",
-    AppInfo.Version, options.McpUrl,
+app.Logger.LogInformation("Paperless MCP server {Version} – public URL: {PublicUrl} – mode: {Mode}",
+    AppInfo.Version, options.PublicUrl?.AbsoluteUri ?? "derived from requests (Host / X-Forwarded-*)",
     options.PaperlessUrl is null ? "users provide Paperless URL and API token" : $"preconfigured instance {options.PaperlessUrl}");
 
+if (options.TrustForwardedHeaders)
+{
+    // Behind a reverse proxy (Traefik, Caddy, nginx, ...): take client IP, scheme and host from X-Forwarded-*.
+    var forwarded = new ForwardedHeadersOptions
+    {
+        ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto | ForwardedHeaders.XForwardedHost,
+        ForwardLimit = null,
+    };
+    forwarded.KnownIPNetworks.Clear();
+    forwarded.KnownProxies.Clear();
+    app.UseForwardedHeaders(forwarded);
+}
 app.UseCors();
 app.UseRateLimiter();
 app.UseAuthentication();
 app.UseAuthorization();
 
-app.MapGet("/", () => Results.Json(new
+app.MapGet("/", (HttpContext http) => Results.Json(new
 {
     name = "paperless-mcp-server",
     version = AppInfo.Version,
-    mcp_endpoint = options.McpUrl.AbsoluteUri,
+    mcp_endpoint = options.GetMcpUrl(http.Request).AbsoluteUri,
     documentation = "https://github.com/mKenfenheuer/paperless-mcp-server",
 }));
 app.MapGet("/healthz", () => Results.Text("ok"));

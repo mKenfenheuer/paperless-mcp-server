@@ -7,8 +7,14 @@ namespace PaperlessMcpServer.Configuration;
 /// </summary>
 public sealed class ServerOptions
 {
-    /// <summary>Public base URL of this server. Used as OAuth issuer and to build the MCP resource URL.</summary>
-    public required Uri PublicUrl { get; init; }
+    /// <summary>
+    /// Public base URL of this server, used as OAuth issuer and to build the MCP resource URL.
+    /// When null, it is derived from each request (honoring X-Forwarded-Proto / X-Forwarded-Host).
+    /// </summary>
+    public Uri? PublicUrl { get; init; }
+
+    /// <summary>Whether X-Forwarded-For / -Proto / -Host headers from reverse proxies are trusted.</summary>
+    public bool TrustForwardedHeaders { get; init; } = true;
 
     /// <summary>Secret used to encrypt client registrations, authorization codes and tokens.</summary>
     public required string SecretKey { get; init; }
@@ -37,11 +43,15 @@ public sealed class ServerOptions
     /// <summary>Maximum size of documents accepted by upload_document.</summary>
     public long MaxUploadBytes { get; init; } = 50L * 1024 * 1024;
 
+    /// <summary>The public base URL for a request: PUBLIC_URL if configured, otherwise scheme and host of the request.</summary>
+    public Uri GetPublicUrl(HttpRequest request) =>
+        PublicUrl ?? new Uri($"{request.Scheme}://{request.Host.Value}/");
+
     /// <summary>The URL of the MCP endpoint, which is the OAuth protected resource.</summary>
-    public Uri McpUrl => new(PublicUrl, "mcp");
+    public Uri GetMcpUrl(HttpRequest request) => new(GetPublicUrl(request), "mcp");
 
     /// <summary>The OAuth issuer identifier (public URL without trailing slash).</summary>
-    public string Issuer => PublicUrl.AbsoluteUri.TrimEnd('/');
+    public string GetIssuer(HttpRequest request) => GetPublicUrl(request).AbsoluteUri.TrimEnd('/');
 
     public bool IsPreconfigured => PaperlessUrl is not null;
 
@@ -49,20 +59,19 @@ public sealed class ServerOptions
     {
         string? Get(string key) => string.IsNullOrWhiteSpace(configuration[key]) ? null : configuration[key]!.Trim();
 
-        var publicUrlRaw = Get("PUBLIC_URL") ?? "http://localhost:8080";
-        if (!Uri.TryCreate(publicUrlRaw, UriKind.Absolute, out var publicUrl) ||
-            (publicUrl.Scheme != Uri.UriSchemeHttp && publicUrl.Scheme != Uri.UriSchemeHttps))
+        Uri? publicUrl = null;
+        if (Get("PUBLIC_URL") is { } publicUrlRaw)
         {
-            throw new InvalidOperationException($"PUBLIC_URL must be an absolute http(s) URL, got '{publicUrlRaw}'.");
-        }
-        if (publicUrl.AbsolutePath != "/")
-        {
-            throw new InvalidOperationException(
-                "PUBLIC_URL must not contain a path. Serve the MCP server on its own (sub)domain, e.g. https://paperless-mcp.example.com.");
-        }
-        if (Get("PUBLIC_URL") is null)
-        {
-            logger?.LogWarning("PUBLIC_URL is not set, using {PublicUrl}. Set it to the URL clients use to reach this server.", publicUrl);
+            if (!Uri.TryCreate(publicUrlRaw, UriKind.Absolute, out publicUrl) ||
+                (publicUrl.Scheme != Uri.UriSchemeHttp && publicUrl.Scheme != Uri.UriSchemeHttps))
+            {
+                throw new InvalidOperationException($"PUBLIC_URL must be an absolute http(s) URL, got '{publicUrlRaw}'.");
+            }
+            if (publicUrl.AbsolutePath != "/")
+            {
+                throw new InvalidOperationException(
+                    "PUBLIC_URL must not contain a path. Serve the MCP server on its own (sub)domain, e.g. https://paperless-mcp.example.com.");
+            }
         }
 
         var secret = Get("SECRET_KEY");
@@ -93,6 +102,7 @@ public sealed class ServerOptions
         return new ServerOptions
         {
             PublicUrl = publicUrl,
+            TrustForwardedHeaders = !string.Equals(Get("TRUST_FORWARDED_HEADERS"), "false", StringComparison.OrdinalIgnoreCase),
             SecretKey = secret,
             EphemeralSecret = ephemeral,
             PaperlessUrl = paperlessUrl,

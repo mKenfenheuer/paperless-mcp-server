@@ -36,9 +36,9 @@ public static class OAuthEndpoints
 
     // ------------------------------------------------------------------- metadata
 
-    private static IResult GetMetadata(ServerOptions options)
+    private static IResult GetMetadata(HttpContext context, ServerOptions options)
     {
-        var issuer = options.Issuer;
+        var issuer = options.GetIssuer(context.Request);
         return Results.Json(new JsonObject
         {
             ["issuer"] = issuer,
@@ -184,21 +184,21 @@ public static class OAuthEndpoints
         var state = Param("state");
         if (Param("response_type") != "code")
         {
-            return ErrorRedirect(options, redirectUri, state, "unsupported_response_type", "Only response_type=code is supported.");
+            return ErrorRedirect(options, context.Request, redirectUri, state, "unsupported_response_type", "Only response_type=code is supported.");
         }
         var codeChallenge = Param("code_challenge");
         if (codeChallenge is null || codeChallenge.Length is < 43 or > 128)
         {
-            return ErrorRedirect(options, redirectUri, state, "invalid_request", "A PKCE code_challenge is required.");
+            return ErrorRedirect(options, context.Request, redirectUri, state, "invalid_request", "A PKCE code_challenge is required.");
         }
         if ((Param("code_challenge_method") ?? "plain") != "S256")
         {
-            return ErrorRedirect(options, redirectUri, state, "invalid_request", "code_challenge_method must be S256.");
+            return ErrorRedirect(options, context.Request, redirectUri, state, "invalid_request", "code_challenge_method must be S256.");
         }
         var resource = Param("resource");
-        if (resource is not null && !IsOwnResource(options, resource))
+        if (resource is not null && !IsOwnResource(options, context.Request, resource))
         {
-            return ErrorRedirect(options, redirectUri, state, "invalid_target", $"Unknown resource '{resource}'.");
+            return ErrorRedirect(options, context.Request, redirectUri, state, "invalid_target", $"Unknown resource '{resource}'.");
         }
 
         var pending = new PendingAuthorization(
@@ -239,7 +239,7 @@ public static class OAuthEndpoints
 
         if (Field("action") == "deny")
         {
-            return ErrorRedirect(options, pending.RedirectUri, pending.State, "access_denied", "The user denied access.");
+            return ErrorRedirect(options, context.Request, pending.RedirectUri, pending.State, "access_denied", "The user denied access.");
         }
 
         var mode = Field("mode") ?? "token";
@@ -297,7 +297,7 @@ public static class OAuthEndpoints
             {
                 ["code"] = sealer.Seal(SealPurpose.AuthorizationCode, code),
                 ["state"] = pending.State,
-                ["iss"] = options.Issuer,
+                ["iss"] = options.GetIssuer(context.Request),
             });
         }
         catch (PaperlessApiException e)
@@ -321,12 +321,12 @@ public static class OAuthEndpoints
             ? (string.IsNullOrEmpty(uri.Authority) ? $"{uri.Scheme}:" : $"{uri.Scheme}://{uri.Authority}")
             : redirectUri;
 
-    private static bool IsOwnResource(ServerOptions options, string resource)
+    private static bool IsOwnResource(ServerOptions options, HttpRequest request, string resource)
     {
         static string Normalize(string value) => value.TrimEnd('/');
         var r = Normalize(resource);
-        return string.Equals(r, Normalize(options.McpUrl.AbsoluteUri), StringComparison.OrdinalIgnoreCase)
-            || string.Equals(r, options.Issuer, StringComparison.OrdinalIgnoreCase);
+        return string.Equals(r, Normalize(options.GetMcpUrl(request).AbsoluteUri), StringComparison.OrdinalIgnoreCase)
+            || string.Equals(r, options.GetIssuer(request), StringComparison.OrdinalIgnoreCase);
     }
 
     private static IResult LoginPageResult(LoginPage.Model model, int statusCode = StatusCodes.Status200OK) =>
@@ -335,13 +335,13 @@ public static class OAuthEndpoints
     private static IResult ErrorPage(HttpStatusCode status, string title, string message) =>
         new HtmlResult(LoginPage.RenderError(title, message), (int)status);
 
-    private static IResult ErrorRedirect(ServerOptions options, string redirectUri, string? state, string error, string description) =>
+    private static IResult ErrorRedirect(ServerOptions options, HttpRequest request, string redirectUri, string? state, string error, string description) =>
         Redirect(redirectUri, new Dictionary<string, string?>
         {
             ["error"] = error,
             ["error_description"] = description,
             ["state"] = state,
-            ["iss"] = options.Issuer,
+            ["iss"] = options.GetIssuer(request),
         });
 
     private static IResult Redirect(string redirectUri, Dictionary<string, string?> parameters) =>
@@ -390,7 +390,7 @@ public static class OAuthEndpoints
                 {
                     return TokenError("invalid_grant", "PKCE verification failed.");
                 }
-                if (Field("resource") is { } resource && !IsOwnResource(options, resource))
+                if (Field("resource") is { } resource && !IsOwnResource(options, context.Request, resource))
                 {
                     return TokenError("invalid_target", $"Unknown resource '{resource}'.");
                 }
