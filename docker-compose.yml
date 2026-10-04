@@ -1,0 +1,19 @@
+services:
+  paperless-mcp:
+    image: ghcr.io/mkenfenheuer/paperless-mcp-server:latest
+    container_name: paperless-mcp
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      # Public HTTPS URL under which MCP clients reach this server (no path).
+      PUBLIC_URL: ${PUBLIC_URL:?Set PUBLIC_URL in .env}
+      # Encrypts tokens and client registrations. Generate with: openssl rand -base64 48
+      SECRET_KEY: ${SECRET_KEY:?Set SECRET_KEY in .env}
+      # Optional: preconfigure one Paperless instance. Users then sign in with username and password.
+      # Without it, users enter their Paperless URL and API token when connecting.
+      PAPERLESS_URL: ${PAPERLESS_URL:-}
+      # Optional (only without PAPERLESS_URL): comma-separated hosts users may connect to.
+      PAPERLESS_ALLOWED_HOSTS: ${PAPERLESS_ALLOWED_HOSTS:-}
+      # Trust X-Forwarded-* headers from the reverse proxy in front of this container.
+      ASPNETCORE_FORWARDEDHEADERS_ENABLED: "true"
